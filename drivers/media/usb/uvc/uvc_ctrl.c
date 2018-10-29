@@ -3,6 +3,7 @@
  *
  *      Copyright (C) 2005-2010
  *          Laurent Pinchart (laurent.pinchart@ideasonboard.com)
+ *      Copyright (C) 2017 XiaoMi, Inc.
  *
  *      This program is free software; you can redistribute it and/or modify
  *      it under the terms of the GNU General Public License as published by
@@ -2001,13 +2002,6 @@ int uvc_ctrl_add_mapping(struct uvc_video_chain *chain,
 	ret = uvc_ctrl_init_xu_ctrl(dev, ctrl);
 	if (ret < 0) {
 		ret = -ENOENT;
-		goto done;
-	}
-
-	/* Validate the user-provided bit-size and offset */
-	if (mapping->size > 32 ||
-	    mapping->offset + mapping->size > ctrl->info.size * 8) {
-		ret = -EINVAL;
 		goto done;
 	}
 

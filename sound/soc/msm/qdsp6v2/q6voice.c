@@ -48,12 +48,10 @@ struct cvd_version_table cvd_version_table_mapping[CVD_INT_VERSION_MAX] = {
 		{CVD_VERSION_0_0, CVD_INT_VERSION_0_0},
 		{CVD_VERSION_2_1, CVD_INT_VERSION_2_1},
 		{CVD_VERSION_2_2, CVD_INT_VERSION_2_2},
-		{CVD_VERSION_2_3, CVD_INT_VERSION_2_3},
 };
 
 static struct common_data common;
 static bool module_initialized;
-static bool voice_call_active;
 
 static int voice_send_enable_vocproc_cmd(struct voice_data *v);
 static int voice_send_netid_timing_cmd(struct voice_data *v);
@@ -124,11 +122,6 @@ static int voice_send_get_sound_focus_cmd(struct voice_data *v,
 				struct sound_focus_param *soundFocusData);
 static int voice_send_get_source_tracking_cmd(struct voice_data *v,
 			struct source_tracking_param *sourceTrackingData);
-
-bool q6voice_voice_call_active(void)
-{
-	return voice_call_active;
-}
 
 static void voice_itr_init(struct voice_session_itr *itr,
 			   u32 session_id)
@@ -5855,8 +5848,6 @@ int voc_end_voice_call(uint32_t session_id)
 		ret = -EINVAL;
 	}
 
-	voice_call_active = false;
-
 	mutex_unlock(&v->lock);
 	return ret;
 }
@@ -6178,8 +6169,6 @@ int voc_start_voice_call(uint32_t session_id)
 		ret = -EINVAL;
 		goto fail;
 	}
-
-	voice_call_active = true;
 fail:
 	mutex_unlock(&v->lock);
 	return ret;
