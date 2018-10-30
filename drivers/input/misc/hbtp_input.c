@@ -42,7 +42,7 @@ struct hbtp_data {
 	struct input_dev *input_dev;
 	s32 count;
 	struct mutex mutex;
-	bool touch_status[HBTP_MAX_FINGER];
+	bool touch_status[HBTP_MAX_FINGER / 2];
 #if defined(CONFIG_FB)
 	struct notifier_block fb_notif;
 #endif
@@ -325,8 +325,8 @@ static struct attribute *secure_touch_attrs[] = {
 	&dev_attr_secure_touch_enable.attr,
 	&dev_attr_secure_touch.attr,
 	&dev_attr_secure_touch_userspace.attr,
-	NULL
 #endif
+	NULL
 };
 
 static const struct attribute_group secure_touch_attr_group = {
@@ -412,7 +412,7 @@ static int hbtp_input_create_input_dev(struct hbtp_input_absinfo *absinfo)
 		__set_bit(i, input_dev->keybit);
 
 	/* For multi touch */
-	input_mt_init_slots(input_dev, HBTP_MAX_FINGER, 0);
+	input_mt_init_slots(input_dev, HBTP_MAX_FINGER / 2, 0);
 	for (i = 0; i <= ABS_MT_LAST - ABS_MT_FIRST; i++) {
 		abs = absinfo + i;
 		if (abs->active) {
@@ -452,17 +452,33 @@ static int hbtp_input_report_events(struct hbtp_data *hbtp_data,
 	int i;
 	struct hbtp_input_touch *tch;
 
-	for (i = 0; i < HBTP_MAX_FINGER; i++) {
+	/*
+	* Why bother reporting 20 touches every time
+	* if we only support 10?
+	*/
+	for (i = 0; i < HBTP_MAX_FINGER / 2; i++) {
 		tch = &(mt_data->touches[i]);
+
 		if (tch->active || hbtp_data->touch_status[i]) {
 			input_mt_slot(hbtp_data->input_dev, i);
 			input_mt_report_slot_state(hbtp_data->input_dev,
 					MT_TOOL_FINGER, tch->active);
-
+			/*
+			* Cut the loop if coordinates or
+			* pressure are clearly broken/invalid
+			*/
+			if (tch->x < 0 || tch->y < 0 || tch->pressure <= 0)
+				continue;
 			if (tch->active) {
 				input_report_abs(hbtp_data->input_dev,
-						ABS_MT_TOOL_TYPE,
-						tch->tool);
+						ABS_MT_POSITION_X,
+						tch->x);
+				input_report_abs(hbtp_data->input_dev,
+						ABS_MT_POSITION_Y,
+						tch->y);
+				input_report_abs(hbtp_data->input_dev,
+						ABS_MT_PRESSURE,
+						tch->pressure);
 				input_report_abs(hbtp_data->input_dev,
 						ABS_MT_TOUCH_MAJOR,
 						tch->major);
@@ -472,35 +488,6 @@ static int hbtp_input_report_events(struct hbtp_data *hbtp_data,
 				input_report_abs(hbtp_data->input_dev,
 						ABS_MT_ORIENTATION,
 						tch->orientation);
-				input_report_abs(hbtp_data->input_dev,
-						ABS_MT_PRESSURE,
-						tch->pressure);
-				/*
-				 * Scale up/down the X-coordinate as per
-				 * DT property
-				 */
-				if (hbtp_data->use_scaling &&
-						hbtp_data->def_maxx > 0 &&
-						hbtp_data->des_maxx > 0)
-					tch->x = (tch->x * hbtp_data->des_maxx)
-							/ hbtp_data->def_maxx;
-
-				input_report_abs(hbtp_data->input_dev,
-						ABS_MT_POSITION_X,
-						tch->x);
-				/*
-				 * Scale up/down the Y-coordinate as per
-				 * DT property
-				 */
-				if (hbtp_data->use_scaling &&
-						hbtp_data->def_maxy > 0 &&
-						hbtp_data->des_maxy > 0)
-					tch->y = (tch->y * hbtp_data->des_maxy)
-							/ hbtp_data->def_maxy;
-
-				input_report_abs(hbtp_data->input_dev,
-						ABS_MT_POSITION_Y,
-						tch->y);
 			}
 			hbtp_data->touch_status[i] = tch->active;
 		}
@@ -1058,5 +1045,5 @@ static void __exit hbtp_exit(void)
 MODULE_DESCRIPTION("Kernel driver to support host based touch processing");
 MODULE_LICENSE("GPLv2");
 
-module_init(hbtp_init);
+late_initcall(hbtp_init);
 module_exit(hbtp_exit);

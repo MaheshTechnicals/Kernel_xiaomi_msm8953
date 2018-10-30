@@ -1,5 +1,4 @@
 /* Copyright (c) 2002,2008-2017, The Linux Foundation. All rights reserved.
- * Copyright (C) 2017 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -143,7 +142,7 @@ static void sync_event_print(struct seq_file *s,
 	case KGSL_CMD_SYNCPOINT_TYPE_FENCE:
 		spin_lock_irqsave(&sync_event->handle_lock, flags);
 
-		seq_printf(s, "sync: [%pK] %s", sync_event->handle,
+		seq_printf(s, "sync: [%pk] %s", sync_event->handle,
 		(sync_event->handle && sync_event->handle->fence)
 				? sync_event->handle->fence->name : "NULL");
 
@@ -175,6 +174,7 @@ static const struct flag_entry context_flags[] = {KGSL_CONTEXT_FLAGS};
  * KGSL_CONTEXT_PRIV_DEVICE_SPECIFIC so it is ok to cross the streams here.
  */
 static const struct flag_entry context_priv[] = {
+	{ KGSL_CONTEXT_PRIV_SUBMITTED, "submitted"},
 	{ KGSL_CONTEXT_PRIV_DETACHED, "detached"},
 	{ KGSL_CONTEXT_PRIV_INVALID, "invalid"},
 	{ KGSL_CONTEXT_PRIV_PAGEFAULT, "pagefault"},

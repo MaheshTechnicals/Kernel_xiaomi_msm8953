@@ -6,7 +6,6 @@
  * lifting
  *
  * Copyright IBM Corp. 2007-2010 Mel Gorman <mel@csn.ul.ie>
- * Copyright (C) 2017 XiaoMi, Inc.
  */
 #include <linux/swap.h>
 #include <linux/migrate.h>
@@ -62,7 +61,6 @@ static void map_pages(struct list_head *list)
 		kasan_alloc_pages(page, 0);
 		arch_alloc_page(page, 0);
 		kernel_map_pages(page, 1, 1);
-		kasan_alloc_pages(page, 0);
 	}
 }
 
@@ -115,45 +113,6 @@ static struct page *pageblock_pfn_to_page(unsigned long start_pfn,
 }
 
 #ifdef CONFIG_COMPACTION
-
-int PageMovable(struct page *page)
-{
-	struct address_space *mapping;
-
-	VM_BUG_ON_PAGE(!PageLocked(page), page);
-	if (!__PageMovable(page))
-		return 0;
-
-	mapping = page_mapping(page);
-	if (mapping && mapping->a_ops && mapping->a_ops->isolate_page)
-		return 1;
-
-	return 0;
-}
-EXPORT_SYMBOL(PageMovable);
-
-void __SetPageMovable(struct page *page, struct address_space *mapping)
-{
-	VM_BUG_ON_PAGE(!PageLocked(page), page);
-	VM_BUG_ON_PAGE((unsigned long)mapping & PAGE_MAPPING_MOVABLE, page);
-	page->mapping = (void *)((unsigned long)mapping | PAGE_MAPPING_MOVABLE);
-}
-EXPORT_SYMBOL(__SetPageMovable);
-
-void __ClearPageMovable(struct page *page)
-{
-	VM_BUG_ON_PAGE(!PageLocked(page), page);
-	VM_BUG_ON_PAGE(!PageMovable(page), page);
-	/*
-	 * Clear registered address_space val with keeping PAGE_MAPPING_MOVABLE
-	 * flag so that VM can catch up released page by driver after isolation.
-	 * With it, VM migration doesn't try to put it back.
-	 */
-	page->mapping = (void *)((unsigned long)page->mapping &
-				PAGE_MAPPING_MOVABLE);
-}
-EXPORT_SYMBOL(__ClearPageMovable);
-
 /* Returns true if the pageblock should be scanned for pages to isolate. */
 static inline bool isolation_suitable(struct compact_control *cc,
 					struct page *page)
@@ -414,6 +373,24 @@ static unsigned long isolate_freepages_block(struct compact_control *cc,
 
 		if (!valid_page)
 			valid_page = page;
+
+		/*
+		 * For compound pages such as THP and hugetlbfs, we can save
+		 * potentially a lot of iterations if we skip them at once.
+		 * The check is racy, but we can consider only valid values
+		 * and the only danger is skipping too much.
+		 */
+		if (PageCompound(page)) {
+			unsigned int comp_order = compound_order(page);
+
+			if (likely(comp_order < MAX_ORDER)) {
+				blockpfn += (1UL << comp_order) - 1;
+				cursor += (1UL << comp_order) - 1;
+			}
+
+			goto isolate_fail;
+		}
+
 		if (!PageBuddy(page))
 			goto isolate_fail;
 
@@ -445,18 +422,23 @@ static unsigned long isolate_freepages_block(struct compact_control *cc,
 
 		/* Found a free page, break it into order-0 pages */
 		isolated = split_free_page(page);
+		if (!isolated)
+			break;
+
 		total_isolated += isolated;
+		cc->nr_freepages += isolated;
 		for (i = 0; i < isolated; i++) {
 			list_add(&page->lru, freelist);
 			page++;
 		}
-
-		/* If a page was split, advance to the end of it */
-		if (isolated) {
-			blockpfn += isolated - 1;
-			cursor += isolated - 1;
-			continue;
+		if (!strict && cc->nr_migratepages <= cc->nr_freepages) {
+			blockpfn += isolated;
+			break;
 		}
+		/* Advance to the end of split page */
+		blockpfn += isolated - 1;
+		cursor += isolated - 1;
+		continue;
 
 isolate_fail:
 		if (strict)
@@ -465,6 +447,16 @@ isolate_fail:
 			continue;
 
 	}
+
+	if (locked)
+		spin_unlock_irqrestore(&cc->zone->lock, flags);
+
+	/*
+	 * There is a tiny chance that we have read bogus compound_order(),
+	 * so be careful to not go outside of the pageblock.
+	 */
+	if (unlikely(blockpfn > end_pfn))
+		blockpfn = end_pfn;
 
 	/* Record how far we have got within the block */
 	*start_pfn = blockpfn;
@@ -478,9 +470,6 @@ isolate_fail:
 	 */
 	if (strict && blockpfn < end_pfn)
 		total_isolated = 0;
-
-	if (locked)
-		spin_unlock_irqrestore(&cc->zone->lock, flags);
 
 	/* Update the pageblock-skip if the whole pageblock was scanned */
 	if (blockpfn == end_pfn)
@@ -723,22 +712,6 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 					goto isolate_success;
 				}
 			}
-
-			/*
-			 * __PageMovable can return false positive so we need
-			 * to verify it under page_lock.
-			 */
-			if (unlikely(__PageMovable(page)) &&
-					!PageIsolated(page)) {
-				if (locked) {
-					spin_unlock_irqrestore(&zone->lru_lock,
-									flags);
-					locked = false;
-				}
-
-				if (isolate_movable_page(page, isolate_mode))
-					goto isolate_success;
-			}
 			continue;
 		}
 
@@ -868,16 +841,8 @@ isolate_migratepages_range(struct compact_control *cc, unsigned long start_pfn,
 		pfn = isolate_migratepages_block(cc, pfn, block_end_pfn,
 							ISOLATE_UNEVICTABLE);
 
-		/*
-		 * In case of fatal failure, release everything that might
-		 * have been isolated in the previous iteration, and signal
-		 * the failure back to caller.
-		 */
-		if (!pfn) {
-			putback_movable_pages(&cc->migratepages);
-			cc->nr_migratepages = 0;
+		if (!pfn)
 			break;
-		}
 
 		if (cc->nr_migratepages == COMPACT_CLUSTER_MAX)
 			break;
@@ -956,7 +921,12 @@ static void isolate_freepages(struct compact_control *cc)
 
 		/* Found a block suitable for isolating free pages from. */
 		isolated = isolate_freepages_block(cc, &isolate_start_pfn,
-					block_end_pfn, freelist, false);
+						block_end_pfn, freelist, false);
+		/* If isolation failed early, do not continue needlessly */
+		if (!isolated && isolate_start_pfn < block_end_pfn &&
+		    cc->nr_migratepages > cc->nr_freepages)
+			break;
+
 		nr_freepages += isolated;
 
 		/*

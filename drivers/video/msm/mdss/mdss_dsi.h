@@ -1,5 +1,4 @@
-/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
- * Copyright (C) 2017 XiaoMi, Inc.
+/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -63,6 +62,7 @@
 #define MDSS_DSI_HW_REV_STEP_1		0x1
 #define MDSS_DSI_HW_REV_STEP_2		0x2
 
+#define MDSS_STATUS_TE_WAIT_MAX		3
 #define NONE_PANEL "none"
 
 enum {		/* mipi dsi panel */
@@ -399,7 +399,6 @@ struct mdss_dsi_ctrl_pdata {
 	int (*on) (struct mdss_panel_data *pdata);
 	int (*post_panel_on)(struct mdss_panel_data *pdata);
 	int (*off) (struct mdss_panel_data *pdata);
-	int (*dispparam_fnc) (struct mdss_panel_data *pdata);
 	int (*low_power_config) (struct mdss_panel_data *pdata, int enable);
 	int (*set_col_page_addr)(struct mdss_panel_data *pdata, bool force);
 	int (*check_status) (struct mdss_dsi_ctrl_pdata *pdata);
@@ -434,8 +433,8 @@ struct mdss_dsi_ctrl_pdata {
 	int disp_en_gpio;
 	int bklt_en_gpio;
 	int mode_gpio;
+	int intf_mux_gpio;
 	int bklt_ctrl;	/* backlight ctrl */
-	u32 bklt_level;
 	bool pwm_pmi;
 	int pwm_period;
 	int pwm_pmic_gpio;
@@ -448,6 +447,7 @@ struct mdss_dsi_ctrl_pdata {
 	bool dsi_irq_line;
 	bool dcs_cmd_insert;
 	atomic_t te_irq_ready;
+	bool idle;
 
 	bool cmd_sync_wait_broadcast;
 	bool cmd_sync_wait_trigger;
@@ -470,62 +470,11 @@ struct mdss_dsi_ctrl_pdata {
 	struct dsi_panel_cmds post_dms_on_cmds;
 	struct dsi_panel_cmds post_panel_on_cmds;
 	struct dsi_panel_cmds off_cmds;
+	struct dsi_panel_cmds lp_on_cmds;
+	struct dsi_panel_cmds lp_off_cmds;
 	struct dsi_panel_cmds status_cmds;
-
-	struct dsi_panel_cmds dispparam_cmds;
-	struct dsi_panel_cmds dispparam_cabcon_cmds;
-	struct dsi_panel_cmds dispparam_cabcguion_cmds;
-	struct dsi_panel_cmds dispparam_cabcstillon_cmds;
-	struct dsi_panel_cmds dispparam_cabcmovieon_cmds;
-	struct dsi_panel_cmds dispparam_cabcoff_cmds;
-	struct dsi_panel_cmds dispparam_ceon_cmds;
-	struct dsi_panel_cmds dispparam_ceoff_cmds;
-	struct dsi_panel_cmds dispparam_gammareload_cmds;
-	struct dsi_panel_cmds dispparam_warm_cmds;
-	struct dsi_panel_cmds dispparam_default_cmds;
-	struct dsi_panel_cmds dispparam_cold_cmds;
-	struct dsi_panel_cmds dispparam_papermode_cmds;
-	struct dsi_panel_cmds dispparam_papermode1_cmds;
-	struct dsi_panel_cmds dispparam_papermode2_cmds;
-	struct dsi_panel_cmds dispparam_papermode3_cmds;
-	struct dsi_panel_cmds dispparam_papermode4_cmds;
-	struct dsi_panel_cmds dispparam_papermode5_cmds;
-	struct dsi_panel_cmds dispparam_papermode6_cmds;
-	struct dsi_panel_cmds dispparam_papermode7_cmds;
-	struct dsi_panel_cmds dispparam_idleon_cmds;
-	struct dsi_panel_cmds dispparam_idleoff_cmds;
-	struct dsi_panel_cmds dispparam_test_cmds;
-
-	struct dsi_panel_cmds dispparam_scon_cmds;
-	struct dsi_panel_cmds dispparam_sreon_cmds;
-	struct dsi_panel_cmds dispparam_sreoff_cmds;
-	struct dsi_panel_cmds dispparam_vividweak_cmds;
-	struct dsi_panel_cmds dispparam_vividstrong_cmds;
-	struct dsi_panel_cmds dispparam_vividoff_cmds;
-	struct dsi_panel_cmds dispparam_smartweak_cmds;
-	struct dsi_panel_cmds dispparam_smartstrong_cmds;
-	struct dsi_panel_cmds dispparam_smartoff_cmds;
-	struct dsi_panel_cmds dispparam_level0_cmds;
-	struct dsi_panel_cmds dispparam_level1_cmds;
-	struct dsi_panel_cmds dispparam_level2_cmds;
-	struct dsi_panel_cmds dispparam_level3_cmds;
-	struct dsi_panel_cmds dispparam_level4_cmds;
-	struct dsi_panel_cmds dispparam_level5_cmds;
-	struct dsi_panel_cmds dispparam_level6_cmds;
-
-	struct dsi_panel_cmds dispparam_nightmode1_cmds;
-	struct dsi_panel_cmds dispparam_nightmode2_cmds;
-	struct dsi_panel_cmds dispparam_nightmode3_cmds;
-	struct dsi_panel_cmds dispparam_nightmode4_cmds;
-	struct dsi_panel_cmds dispparam_nightmode5_cmds;
-
-	struct dsi_panel_cmds dispparam_normal1_cmds;
-	struct dsi_panel_cmds dispparam_normal2_cmds;
-	struct dsi_panel_cmds dispparam_srgb_cmds;
-
-	struct dsi_panel_cmds dispparam_dimmingon_cmds;
-	struct delayed_work cmds_work;
-
+	struct dsi_panel_cmds idle_on_cmds; /* for lp mode */
+	struct dsi_panel_cmds idle_off_cmds;
 	u32 *status_valid_params;
 	u32 *status_cmds_rlen;
 	u32 *status_value;
@@ -545,13 +494,13 @@ struct mdss_dsi_ctrl_pdata {
 	struct completion video_comp;
 	struct completion dynamic_comp;
 	struct completion bta_comp;
+	struct completion te_irq_comp;
 	spinlock_t irq_lock;
 	spinlock_t mdp_lock;
 	int mdp_busy;
 	struct mutex mutex;
 	struct mutex cmd_mutex;
 	struct mutex cmdlist_mutex;
-	struct mutex dsi_ctrl_mutex;
 	struct regulator *lab; /* vreg handle */
 	struct regulator *ibb; /* vreg handle */
 	struct mutex clk_lane_mutex;
@@ -563,7 +512,6 @@ struct mdss_dsi_ctrl_pdata {
 	char dlane_swap;	/* data lane swap */
 	bool is_phyreg_enabled;
 	bool burst_mode_enabled;
-	bool dsi_pipe_ready;
 
 	struct dsi_buf tx_buf;
 	struct dsi_buf rx_buf;
@@ -615,6 +563,7 @@ struct dsi_status_data {
 	struct notifier_block fb_notifier;
 	struct delayed_work check_status;
 	struct msm_fb_data_type *mfd;
+	struct work_struct irq_done;
 };
 
 void mdss_dsi_read_hw_revision(struct mdss_dsi_ctrl_pdata *ctrl);
@@ -647,6 +596,7 @@ int mdss_dsi_wait_for_lane_idle(struct mdss_dsi_ctrl_pdata *ctrl);
 
 irqreturn_t mdss_dsi_isr(int irq, void *ptr);
 irqreturn_t hw_vsync_handler(int irq, void *data);
+void disable_esd_thread(void);
 void mdss_dsi_irq_handler_config(struct mdss_dsi_ctrl_pdata *ctrl_pdata);
 
 void mdss_dsi_set_tx_power_mode(int mode, struct mdss_panel_data *pdata);
@@ -725,6 +675,10 @@ void mdss_dsi_set_burst_mode(struct mdss_dsi_ctrl_pdata *ctrl);
 void mdss_dsi_set_reg(struct mdss_dsi_ctrl_pdata *ctrl, int off,
 	u32 mask, u32 val);
 int mdss_dsi_phy_pll_reset_status(struct mdss_dsi_ctrl_pdata *ctrl);
+int mdss_dsi_panel_power_ctrl(struct mdss_panel_data *pdata, int power_state);
+
+int mdss_dsi_pinctrl_set_state(struct mdss_dsi_ctrl_pdata *ctrl_pdata,
+								bool active);
 
 static inline const char *__mdss_dsi_pm_name(enum dsi_pm_type module)
 {
@@ -927,6 +881,11 @@ static inline bool mdss_dsi_is_panel_on_interactive(
 static inline bool mdss_dsi_is_panel_on_lp(struct mdss_panel_data *pdata)
 {
 	return mdss_panel_is_power_on_lp(pdata->panel_info.panel_power_state);
+}
+
+static inline bool mdss_dsi_is_panel_on_ulp(struct mdss_panel_data *pdata)
+{
+	return mdss_panel_is_power_on_ulp(pdata->panel_info.panel_power_state);
 }
 
 static inline bool mdss_dsi_ulps_feature_enabled(

@@ -1,5 +1,4 @@
-/* Copyright (c) 2008-2017, The Linux Foundation. All rights reserved.
- * Copyright (C) 2017 XiaoMi, Inc.
+/* Copyright (c) 2008-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -35,7 +34,7 @@
 
 #define DIAG_MAX_REQ_SIZE	(16 * 1024)
 #define DIAG_MAX_RSP_SIZE	(16 * 1024)
-#define APF_DIAG_PADDING	256
+#define APF_DIAG_PADDING	0
 /*
  * In the worst case, the HDLC buffer can be atmost twice the size of the
  * original packet. Add 3 bytes for 16 bit CRC (2 bytes) and a delimiter
@@ -407,6 +406,7 @@ struct diag_md_session_t {
 	int pid;
 	int peripheral_mask;
 	uint8_t hdlc_disabled;
+	uint8_t msg_mask_tbl_count;
 	struct timer_list hdlc_reset_timer;
 	struct diag_mask_info *msg_mask;
 	struct diag_mask_info *log_mask;
@@ -464,6 +464,9 @@ struct diagchar_dev {
 	struct class *diagchar_class;
 	struct device *diag_dev;
 	int ref_count;
+	int mask_clear;
+	struct mutex diag_maskclear_mutex;
+	struct mutex diag_notifier_mutex;
 	struct mutex diagchar_mutex;
 	struct mutex diag_file_mutex;
 	wait_queue_head_t wait_q;
@@ -582,8 +585,10 @@ struct diagchar_dev {
 	struct diag_mask_info *event_mask;
 	struct diag_mask_info *build_time_mask;
 	uint8_t msg_mask_tbl_count;
+	uint8_t bt_msg_mask_tbl_count;
 	uint16_t event_mask_size;
 	uint16_t last_event_id;
+	struct mutex msg_mask_lock;
 	/* Variables for Mask Centralization */
 	uint16_t num_event_id[NUM_PERIPHERALS];
 	uint32_t num_equip_id[NUM_PERIPHERALS];
@@ -595,6 +600,7 @@ struct diagchar_dev {
 #endif
 	int time_sync_enabled;
 	uint8_t uses_time_api;
+	struct platform_device *pdev;
 };
 
 extern struct diagchar_dev *driver;
@@ -624,6 +630,8 @@ void diag_cmd_remove_reg(struct diag_cmd_reg_entry_t *entry, uint8_t proc);
 void diag_cmd_remove_reg_by_pid(int pid);
 void diag_cmd_remove_reg_by_proc(int proc);
 int diag_cmd_chk_polling(struct diag_cmd_reg_entry_t *entry);
+int diag_mask_param(void);
+void diag_clear_masks(int pid);
 
 void diag_record_stats(int type, int flag);
 
